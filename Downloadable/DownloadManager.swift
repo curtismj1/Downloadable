@@ -13,6 +13,7 @@ protocol Downloadable {
     func halt()
     func contains(item: Downloadable) -> Bool
     var id: String { get }
+    func getStatus() -> Float
 }
 
 class Article {
@@ -53,17 +54,21 @@ class DownloadManager {
     }
     
     private func append(item: Downloadable) {
-        downloadStack.last?.halt()
-        item.download(callback: {
-            self.download()
-        })
-        downloadStack.append(item)
+
+            self.downloadStack.last?.halt()
+            item.download(callback: {
+                self.download()
+            })
+            self.downloadStack.append(item)
+        
     }
     private func download() {
-        downloadStack.popLast()
-        downloadStack.last?.download(callback: {
-            self.download()
-        })
+
+            self.downloadStack.popLast()
+            self.downloadStack.last?.download(callback: {
+                self.download()
+            })
+        
     }
 }
 let updatedDownload = "DOWNLOAD_STATUS_UPDATED"
@@ -87,19 +92,24 @@ class DownloadArticle: Downloadable {
     var callBack: (() -> ())?
     
     lazy var timer: Timer = {
-        return Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true,
-            block: { (timer) in
-                self.progress += 1
-                if self.progress > self.finishedInt {
-                    timer.invalidate()
-                    self.callBack?()
-                }
-                NotificationCenter.default.post(Notification(name: Notification.Name(rawValue: updatedDownload), object: self, userInfo: nil))
-            }
-        )
+        return self.getTimer()
     }()
     
+    private func getTimer() -> Timer {
+        return Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true,
+                                    block: { (timer) in
+                                        self.progress += 10
+                                        if self.progress > self.finishedInt {
+                                            timer.invalidate()
+                                            self.callBack?()
+                                        }
+                                        NotificationCenter.default.post(Notification(name: Notification.Name(rawValue: updatedDownload), object: self, userInfo: nil))
+        }
+        )
+    }
+    
     func download(callback: (() -> ())?) {
+        timer = getTimer()
         timer.fire()
         callBack = callback
     }
@@ -107,9 +117,17 @@ class DownloadArticle: Downloadable {
     func halt() {
         timer.invalidate()
     }
+    
+    func getStatus() -> Float {
+        return Float(progress)/Float(finishedInt)
+    }
 }
 
 class DownloadIssue: Downloadable {
+    
+    func getStatus() -> Float {
+        return Float(progress)/Float(finishedInt)
+    }
     
     var id: String {
         return issue.title
@@ -119,7 +137,12 @@ class DownloadIssue: Downloadable {
         return articleIndexDictionary[item.id] != nil
     }
 
+    var finishedInt = 0
+    var progress = 0
+    var isHalted = false
+    
     let issue: Issue
+    
     private var addOffset = false
     var articleIndexDictionary: [String: Int] = [:]
     
@@ -129,47 +152,63 @@ class DownloadIssue: Downloadable {
             return _currentSelectedIndex
         }
         set {
-            _currentSelectedIndex = newValue
-            offset = 0
-            updateDownloadingIndex()
+            if newValue != _currentSelectedIndex {
+                _currentSelectedIndex = newValue
+                offset = 0
+                currentDownloadingIndex = newValue
+            }
         }
     }
     private var currentDownloadingIndex = 0
     
     func updateDownloadingIndex() {
         if currentDownloadingIndex < currentSelectedIndex {
-            currentDownloadingIndex = currentSelectedIndex + self.offset
+            currentDownloadingIndex = currentSelectedIndex + self.offset - 1
         } else {
             currentDownloadingIndex = self.currentSelectedIndex - self.offset
             self.offset += 1
         }
+        print(currentDownloadingIndex)
     }
-    
     
     var offset = 0
     var downloadArticles: [Downloadable] = []
+    var previousArticleProgress = 0
     
     init(issue: Issue) {
         self.issue = issue
         for (index, article) in issue.articles.enumerated() {
             let downloadArticle = DownloadArticle(article: article)
+            progress += downloadArticle.progress
+            finishedInt += downloadArticle.finishedInt
             downloadArticles.append(downloadArticle)
             articleIndexDictionary[downloadArticle.id] = index
-        }
-        downloadArticles = issue.articles.map {
-            return DownloadArticle(article: $0)
+            NotificationCenter.default.addObserver(forName: NSNotification.Name(rawValue: updatedDownload), object: downloadArticle, queue: nil, using: { (notification) in
+                guard let articleObject = notification.object as? DownloadArticle else {
+                    return
+                }
+                self.progress += {
+                    if self.previousArticleProgress > articleObject.progress {
+                        return articleObject.progress
+                    } else {
+                        return articleObject.progress - self.previousArticleProgress
+                    }
+                }()
+                self.previousArticleProgress = articleObject.progress
+                NotificationCenter.default.post(name: NSNotification.Name(rawValue: updatedDownload), object: self)
+            })
+
         }
     }
     
     func download(callback: (() -> ())?) {
+        updateDownloadingIndex()
         if currentDownloadingIndex >= 0 && currentDownloadingIndex < downloadArticles.count {
             downloadArticles[currentDownloadingIndex].download(callback: {
-                self.updateDownloadingIndex()
                 return self.download(callback: callback)
             })
         } else {
-            updateDownloadingIndex()
-            if currentDownloadingIndex >= 0 && currentDownloadingIndex < downloadArticles.count {
+            if currentSelectedIndex + offset >= downloadArticles.count && currentSelectedIndex - offset < 0 {
                 callback?()
                 return
             }
@@ -178,6 +217,6 @@ class DownloadIssue: Downloadable {
     }
     
     func halt() {
-        
+        isHalted = true
     }
 }

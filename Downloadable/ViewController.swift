@@ -76,7 +76,9 @@ class ViewController: UIViewController {
     }
     
     func createIssue() -> Issue {
-        let articles = [createArticle(), createArticle(), createArticle(), createArticle(), createArticle()]
+        let articles = Array(0...10000).map {_ in
+            return createArticle()
+        }
         let issue = Issue(articles: articles, title: "Issue \(issueCount)")
         issueCount += 1
         return issue
